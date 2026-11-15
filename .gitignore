@@ -1,3 +1,26 @@
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local configuration
+config.local.lua
+secrets.lua
+
 # Compiled Lua sources
 luac.out
 
