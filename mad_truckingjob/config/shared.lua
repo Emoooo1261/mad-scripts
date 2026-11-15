@@ -1,17 +1,3 @@
---- TODO LIST
---- 1. Implement functionality for loading up the trailer -> and then loading off the trailer at destination.
---- 5. Show when something happens as notifications on the phone.
---- 6. Check https://overextended.dev/docs/ox_lib/Zones/Shared lib for spatial check system.
----
----
----
----
----
----
----
----
----
-
 return {
     contracts = {
         {
