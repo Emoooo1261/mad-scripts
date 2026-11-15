@@ -47,8 +47,7 @@ function CreateJobContract(contractTitle)
             description = 'Couldn\'t spawn job vehicle. Is spawn area occupied?',
             type = 'error'
         })
-
-        lib.print.warn('[-]', func_name, 'Couldn\'t spawn job vehicle. Maybe spawn area is occupied.')
+        warn(string.format('%s - Couldn\'t spawn job vehicle. Maybe spawn area is occupied.', func_name))
         lib.print.debug('[OUT]', func_name, '-successRegisteringVehicle=', successRegisteringVehicle)
         return nil
     elseif successRegisteringVehicle == nil or not contractId or not destination then
@@ -94,6 +93,9 @@ local function finishJobContract()
 end
 
 function CancelJobContract()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-')
+
     if not contract.id then
         error('Contract ID not found!', 1)
     end
@@ -126,6 +128,8 @@ function CancelJobContract()
         description = 'The active job was cancelled.',
         type = 'success'
     })
+
+    lib.print.debug('[OUT]', func_name, '-')
     return true
 end
 
@@ -232,6 +236,25 @@ RegisterNetEvent('mad_truckingjob:client:registerVehicleTargets', function(truck
     })
 
     lib.print.debug('[OUT]mad_truckingjob:client:registerTruckTarget', '-')
+end)
+
+RegisterNetEvent('mad_truckingjob:client:jobExpired', function(contractId)
+    lib.print.debug('[IN]mad_truckingjob:client:jobExpired', '-contractId=', contractId)
+
+    if not contractId then
+        error('Received invalid contractId', 1)
+    end
+
+    finishJobContract()
+
+    lib.notify({
+            title = 'Trucking job',
+            description = 'Contract expired! You failed to deliver the cargo on time.',
+            type = 'error'
+        })
+
+
+    lib.print.debug('[OUT]mad_truckingjob:client:jobExpired', '-')
 end)
 
 RegisterNetEvent('mad_truckingjob:client:toggleSpawnAreaDebug', function(truckSpawnCoords, trailerSpawnCoords, spawnAreaSize)

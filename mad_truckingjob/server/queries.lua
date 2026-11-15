@@ -70,6 +70,10 @@ function AddContractToSQL(source, contractTitle, startCoords, endCoords)
 end
 
 local function setExistingContractStatusInSQL(source, contractId, status)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-contractId=', contractId, '-status', status)
+
+
     if not contractId then
         error('Invalid contractId!', 1)
     end
@@ -94,14 +98,26 @@ local function setExistingContractStatusInSQL(source, contractId, status)
         error(('Failed to set contract %s to %s for player %s'):format(contractId, status, citizenId), 1)
     end
 
-    lib.print.debug('[OUT]', 'setExistingContractStatusInSQL', '-updatedRows=', updatedRows)
+    lib.print.debug('[OUT]', func_name, '-updatedRows=', updatedRows)
     return true
 end
 
 function SetExistingContractToCompletedInSQL(source, contractId)
-    return setExistingContractStatusInSQL(source, contractId, 'completed')
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-source=', source, '-contractId', contractId)
+
+    local result = setExistingContractStatusInSQL(source, contractId, 'completed')
+
+    lib.print.debug('[OUT]', func_name, '-result=', result)
+    return result
 end
 
 function SetExistingContractToCancelledInSQL(source, contractId)
-    return setExistingContractStatusInSQL(source, contractId, 'cancelled')
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-source=', source, '-contractId', contractId)
+
+    local result = setExistingContractStatusInSQL(source, contractId, 'cancelled')
+
+    lib.print.debug('[OUT]', func_name, '-result=', result)
+    return result
 end

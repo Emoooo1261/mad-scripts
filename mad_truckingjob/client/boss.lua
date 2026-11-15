@@ -151,7 +151,6 @@ end)
 
 -- Cleanup when resource is stopped
 AddEventHandler('onResourceStop', function(resource)
-    local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]onResourceStop', '-resource=', resource)
 
     if resource ~= GetCurrentResourceName() then return end

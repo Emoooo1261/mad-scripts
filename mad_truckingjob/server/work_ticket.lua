@@ -29,7 +29,7 @@ function GiveWorkTicket(source, contractTitle, contractId)
             )
         else
             -- Doesn't stop the job from being created, but player will not have a work ticket in their inventory
-            lib.print.warning('Player cannot carry work ticket!')
+            warn(string.format('Player %s cannot carry work ticket!', source))
         end
     end
 
@@ -53,6 +53,8 @@ function UpdateWorkTicket(source, contractId, status)
                 newDescription = string.format('%s Truck RETURNED and Job COMPLETED!', item.metadata.description)
             elseif status == 'CANCELLED' then
                 newDescription = string.format('%s Job CANCELLED!', item.metadata.description)
+            elseif status == 'EXPIRED' then
+                newDescription = string.format('%s Job EXPIRED!', item.metadata.description)
             end
 
             local newMetadata = {title = item.metadata.title,

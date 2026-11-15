@@ -2,7 +2,10 @@ local configShared = require 'config.shared'
 local activeContracts = {}
 local activeJobVehicles = {}
 local activeJobCitizenIds = {}
+local isExpirationThreadRunning = false
+
 local CONTRACT_TIMEOUT_MS = 45 * 60 * 1000  -- 45mins
+
 
 -- TODO finish the timeout function
 -- TODO i think citizenId needs to be used instead of source, because source gives the current server id of the player,
@@ -48,41 +51,63 @@ local function isValidContract(source, contractTitle)
     return isContractFound
 end
 
--- local function expireActiveContract(source, contractId)
---     if activeContracts[source] ~= contractId then
---         return
---     end
+local function expireActiveContract(source, contractId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-source', source, '-contractId=', contractId)
 
---     local vehicles = activeJobVehicles[source]
---     if not vehicles or vehicles.closing then
---         return
---     end
---     vehicles.closing = true
+    if activeContracts[source].id ~= contractId then
+        warn(string.format('%s - Invalid contract id.', func_name))
+        return
+    end
 
---     local citizenId = activeJobCitizenIds[source]
---     SetExistingContractToCancelledForCitizenInSQL(citizenId, contractId)
+    -- local citizenId = activeJobCitizenIds[source]
+    SetExistingContractToCancelledInSQL(source, contractId)
 
---     local player = exports.qbx_core:GetPlayer(source)
---     local playerStillOwnsContract = player and player.PlayerData.citizenid == citizenId
---     if playerStillOwnsContract then
---         UpdateWorkTicket(source, contractId, 'CANCELLED')
---     end
+    local player = exports.qbx_core:GetPlayer(source)
+    local playerStillOwnsContract = (player and activeContracts[source].id == contractId)
+    if playerStillOwnsContract then
+        UpdateWorkTicket(source, contractId, 'EXPIRED')   -- THIS IS NOT CALLED
+    end
 
---     for _, vehicleType in ipairs({'truck', 'trailer'}) do
---         local vehicle = vehicles[vehicleType]
---         if vehicle and vehicle ~= 0 and DoesEntityExist(vehicle) then
---             DeleteEntity(vehicle)
---         end
---     end
+    activeContracts[source] = nil
+    activeJobVehicles[source] = nil
 
---     activeContracts[source] = nil
---     activeJobVehicles[source] = nil
---     activeJobCitizenIds[source] = nil
+    if playerStillOwnsContract then
+        TriggerClientEvent('mad_truckingjob:client:jobExpired', source, contractId)
+    end
+end
 
---     if playerStillOwnsContract then
---         TriggerClientEvent('mad_truckingjob:client:jobExpired', source, contractId)
---     end
--- end
+local function startExpirationThread()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-')
+
+    if isExpirationThreadRunning then
+        lib.print.debug('[-]', func_name, 'Expiration thread already running.')
+        return
+    end
+
+    isExpirationThreadRunning = true
+
+    CreateThread(function()
+        lib.print.debug('[-]', func_name, 'Expiration thread started.')
+        while next(activeContracts) do
+            local now = GetGameTimer()
+
+            for source, contract in pairs(activeContracts) do
+                if now >= contract.expiresAt then
+                    expireActiveContract(source, contract.id)
+                end
+            end
+
+            Wait(60 * 1000) -- 1 minute 
+        end
+
+        lib.print.debug('[-]', func_name, 'Expiration thread stopped.')
+        isExpirationThreadRunning = false
+    end)
+
+    lib.print.debug('[OUT]', func_name, '-')
+end
 
 
 lib.callback.register('mad_truckingjob:server:addActiveContract', function(source, contractTitle)
@@ -111,18 +136,18 @@ lib.callback.register('mad_truckingjob:server:addActiveContract', function(sourc
 
         contractId = AddContractToSQL(source, contractTitle, truckAndTrailer.trailerCoords, destination)
 
-        activeContracts[source] = contractId  -- cache
+        activeContracts[source] = {id = contractId,
+                                   expiresAt = GetGameTimer() + CONTRACT_TIMEOUT_MS}
+
         activeJobVehicles[source] = {
             truck = truckAndTrailer.truck,
             trailer = truckAndTrailer.trailer
         }
         GiveWorkTicket(source, contractTitle, contractId)
 
-        SetTimeout(CONTRACT_TIMEOUT_MS, function()
-            expireActiveContract(source, contractId)
-        end)
+        startExpirationThread()
     else
-        lib.print.warn('[]mad_truckingjob:server:addActiveContract', 'Spawning job vehicles failed.')
+        warn(string.format('mad_truckingjob:server:addActiveContract - Spawning job vehicles failed.'))
     end
 
     lib.print.debug('[OUT]mad_truckingjob:server:addActiveContract', '-successRegisteringVehicle=', successRegisteringVehicle, '-contractId=', contractId, '-destination=', destination)
@@ -136,7 +161,7 @@ lib.callback.register('mad_truckingjob:server:removeActiveContract', function(so
         error('Invalid input!', 1)
     end
 
-    if activeContracts[source] == contractId then
+    if activeContracts[source].id == contractId then
         local success = false
 
         if isTrailer then
@@ -155,18 +180,20 @@ lib.callback.register('mad_truckingjob:server:removeActiveContract', function(so
         end
         DespawnJobVehicle(vehicleNetId)
     else
-        lib.print.warning('Tried to remove a contract that was not active!')
+        warn(string.format('Tried to remove a contract that was not active!'))
     end
 
     lib.print.debug('[OUT]mad_truckingjob:server:removeActiveContract', '-')
 end)
 
 lib.callback.register('mad_truckingjob:server:cancelActiveContract', function(source, contractId)
+    lib.print.debug('[IN]', 'mad_truckingjob:server:cancelActiveContract', '-contractId=', contractId)
+
     if not contractId then
         error('Invalid contractId!', 1)
     end
 
-    if activeContracts[source] ~= contractId then
+    if activeContracts[source].id ~= contractId then
         error('Contract not in local memory!', 1) -- TODO: get active contracts from SQL on resource initialization, to prevent losing job on server restart
     end
 
@@ -184,5 +211,7 @@ lib.callback.register('mad_truckingjob:server:cancelActiveContract', function(so
 
     activeContracts[source] = nil
     activeJobVehicles[source] = nil
+
+    lib.print.debug('[OUT]', 'mad_truckingjob:server:cancelActiveContract', '-')
     return true
 end)
