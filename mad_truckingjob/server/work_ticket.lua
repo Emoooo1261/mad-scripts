@@ -36,11 +36,24 @@ function GiveWorkTicket(source, contractTitle, contractId)
     lib.print.debug('[OUT]', func_name, '-')
 end
 
-function UpdateWorkTicket(source, contractId, status)
-    local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-source=', source, '-contractId=', contractId, '-status', status)
 
-    local itemSlots = exports.ox_inventory:Search(source, 'slots', 'stickynote')
+function UpdateWorkTicket(citizenId, contractId, status)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-citizenId=', citizenId, '-contractId=', contractId, '-status', status)
+
+    local player = exports.qbx_core:GetPlayerByCitizenId(citizenId)
+    local playerSource = player and player.PlayerData.source
+
+    if not playerSource then
+        if status == 'EXPIRED' then  -- Job can expire when player is offline
+            warn(string.format('Couldn\'t update work ticket to EXPIRED for %s', citizenId))
+            return false
+        else
+            error(string.format('Couldn\'t get source for citizenId= %s', citizenId), 1)
+        end
+    end
+
+    local itemSlots = exports.ox_inventory:Search(playerSource, 'slots', 'stickynote')
 
     local result = false
     for _, item in pairs(itemSlots) do
@@ -62,7 +75,7 @@ function UpdateWorkTicket(source, contractId, status)
                                 contractId = item.metadata.contractId,
                                 status = status}
 
-            exports.ox_inventory:SetMetadata(source, item.slot, newMetadata)
+            exports.ox_inventory:SetMetadata(playerSource, item.slot, newMetadata)
             result = true
         end
     end

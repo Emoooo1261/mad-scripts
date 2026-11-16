@@ -31,13 +31,9 @@ local function getDeliveryDestination(contractTitle)
     return deliveryDestination
 end
 
-local function isValidContract(source, contractTitle)
+local function isValidContract(contractTitle)
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-source=', source, '-contractTitle=', contractTitle)
-
-    if not contractTitle or not source then
-        error('Invalid input!', 1)
-    end
+    lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle)
 
     local isContractFound = false
     for _, contract in ipairs(configShared.contracts) do  -- TODO: Need list of available contracts instead of all contracts
@@ -51,30 +47,28 @@ local function isValidContract(source, contractTitle)
     return isContractFound
 end
 
-local function expireActiveContract(source, contractId)
+local function expireActiveContract(citizenId, contractId)
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-source', source, '-contractId=', contractId)
+    lib.print.debug('[IN]', func_name, '-citizenId', citizenId, '-contractId=', contractId)
 
-    if activeContracts[source].id ~= contractId then
-        warn(string.format('%s - Invalid contract id.', func_name))
-        return
+    if activeContracts[citizenId].id ~= contractId then
+        error(string.format('%s - Invalid contract id for citizen id= %s.', contractId, citizenId), 1)
     end
 
-    -- local citizenId = activeJobCitizenIds[source]
-    SetExistingContractToCancelledInSQL(source, contractId)
+    SetExistingContractToCancelledInSQL(citizenId, contractId)
 
-    local player = exports.qbx_core:GetPlayer(source)
-    local playerStillOwnsContract = (player and activeContracts[source].id == contractId)
-    if playerStillOwnsContract then
-        UpdateWorkTicket(source, contractId, 'EXPIRED')   -- THIS IS NOT CALLED
+    -- Need to update source because player might have reconnected and not have the original server id.
+    -- Or player can be offline.
+    local player = exports.qbx_core:GetPlayerByCitizenId(citizenId)
+    local playerSource = player and player.PlayerData.source
+
+    if playerSource then
+        UpdateWorkTicket(citizenId, contractId, 'EXPIRED')
+        TriggerClientEvent('mad_truckingjob:client:jobExpired', playerSource, contractId)
     end
 
-    activeContracts[source] = nil
-    activeJobVehicles[source] = nil
-
-    if playerStillOwnsContract then
-        TriggerClientEvent('mad_truckingjob:client:jobExpired', source, contractId)
-    end
+    activeContracts[citizenId] = nil
+    activeJobVehicles[citizenId] = nil
 end
 
 local function startExpirationThread()
@@ -93,9 +87,9 @@ local function startExpirationThread()
         while next(activeContracts) do
             local now = GetGameTimer()
 
-            for source, contract in pairs(activeContracts) do
+            for citizenId, contract in pairs(activeContracts) do
                 if now >= contract.expiresAt then
-                    expireActiveContract(source, contract.id)
+                    expireActiveContract(citizenId, contract.id)
                 end
             end
 
@@ -109,20 +103,39 @@ local function startExpirationThread()
     lib.print.debug('[OUT]', func_name, '-')
 end
 
+local function getCitizenIdFromSource(source)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-source=', source)
 
-lib.callback.register('mad_truckingjob:server:addActiveContract', function(source, contractTitle)
-    lib.print.debug('[IN]mad_truckingjob:server:addActiveContract', '-source=', source, '-contractTitle=', contractTitle)
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player then
+        error(string.format("Failed to get player from source = %s", source))
+    end
+    local citizenId = Player.PlayerData.citizenid
 
-    if not isValidContract(source, contractTitle) then
+    lib.print.debug('[OUT]', func_name, '-citizenId=', citizenId)
+    return citizenId
+end
+
+lib.callback.register('mad_truckingjob:server:addJobContract', function(source, contractTitle)
+    lib.print.debug('[IN]mad_truckingjob:server:addJobContract', '-source=', source, '-contractTitle=', contractTitle)
+
+    if not source or not contractTitle then
+        error('Invalid input parameters!', 1)
+    end
+
+    if not isValidContract(contractTitle) then
         error('Couldn\'t find correct contract!', 1)
     end
 
-    if activeContracts[source] then
-        error('Player already has an active trucking job!', 1)
+    local citizenId = getCitizenIdFromSource(source)
+
+    if activeContracts[citizenId] then
+        error(string.format('Player with citizenId= %s already has an active trucking job!', citizenId))
     end
 
     local truckAndTrailer = SpawnJobVehicle()
-    local successRegisteringVehicle = RegisterJobVehicleForClient(truckAndTrailer)
+    local successRegisteringVehicle = RegisterJobVehicleForClient(source, truckAndTrailer)
 
     local contractId = nil
     local destination = nil
@@ -136,10 +149,10 @@ lib.callback.register('mad_truckingjob:server:addActiveContract', function(sourc
 
         contractId = AddContractToSQL(source, contractTitle, truckAndTrailer.trailerCoords, destination)
 
-        activeContracts[source] = {id = contractId,
-                                   expiresAt = GetGameTimer() + CONTRACT_TIMEOUT_MS}
+        activeContracts[citizenId] = {id = contractId,
+                                      expiresAt = GetGameTimer() + CONTRACT_TIMEOUT_MS}
 
-        activeJobVehicles[source] = {
+        activeJobVehicles[citizenId] = {
             truck = truckAndTrailer.truck,
             trailer = truckAndTrailer.trailer
         }
@@ -147,60 +160,64 @@ lib.callback.register('mad_truckingjob:server:addActiveContract', function(sourc
 
         startExpirationThread()
     else
-        warn(string.format('mad_truckingjob:server:addActiveContract - Spawning job vehicles failed.'))
+        warn(string.format('mad_truckingjob:server:addJobContract - Spawning job vehicles failed.'))
     end
 
-    lib.print.debug('[OUT]mad_truckingjob:server:addActiveContract', '-successRegisteringVehicle=', successRegisteringVehicle, '-contractId=', contractId, '-destination=', destination)
+    lib.print.debug('[OUT]mad_truckingjob:server:addJobContract', '-successRegisteringVehicle=', successRegisteringVehicle, '-contractId=', contractId, '-destination=', destination)
     return successRegisteringVehicle, contractId, destination
 end)
 
-lib.callback.register('mad_truckingjob:server:removeActiveContract', function(source, contractId, vehicleNetId, isTrailer)
-    lib.print.debug('[IN]mad_truckingjob:server:removeActiveContract', '-source=', source, '-contractId=', contractId, '-vehicleNetId=', vehicleNetId, '-isTrailer=', isTrailer)
+lib.callback.register('mad_truckingjob:server:completeJobContract', function(source, contractId, vehicleNetId, isTrailer)
+    lib.print.debug('[IN]mad_truckingjob:server:completeJobContract', '-source=', source, '-contractId=', contractId, '-vehicleNetId=', vehicleNetId, '-isTrailer=', isTrailer)
 
-    if not source or not contractId or not vehicleNetId then
-        error('Invalid input!', 1)
+    if not source or not contractId or not vehicleNetId or isTrailer == nil then
+        error('Invalid input parameters!', 1)
     end
 
-    if activeContracts[source].id == contractId then
+    local citizenId = getCitizenIdFromSource(source)
+
+    if activeContracts[citizenId].id == contractId then
         local success = false
 
         if isTrailer then
-            success = UpdateWorkTicket(source, contractId, 'RETURNED_TRAILER')
-            if activeJobVehicles[source] then
-                activeJobVehicles[source].trailer = nil
+            success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRAILER')
+            if activeJobVehicles[citizenId] then
+                activeJobVehicles[citizenId].trailer = nil
             end
         else
-            success = UpdateWorkTicket(source, contractId, 'RETURNED_TRUCK')
+            success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRUCK')
 
-            SetExistingContractToCompletedInSQL(source, contractId)
-            activeContracts[source] = nil
-            if activeJobVehicles[source] then
-                activeJobVehicles[source].truck = nil
+            SetExistingContractToCompletedInSQL(citizenId, contractId)
+            activeContracts[citizenId] = nil
+            if activeJobVehicles[citizenId] then
+                activeJobVehicles[citizenId].truck = nil
             end
         end
         DespawnJobVehicle(vehicleNetId)
     else
-        warn(string.format('Tried to remove a contract that was not active!'))
+        error(string.format('Tried to remove a contract that was not active!'))
     end
 
-    lib.print.debug('[OUT]mad_truckingjob:server:removeActiveContract', '-')
+    lib.print.debug('[OUT]mad_truckingjob:server:completeJobContract', '-')
 end)
 
-lib.callback.register('mad_truckingjob:server:cancelActiveContract', function(source, contractId)
-    lib.print.debug('[IN]', 'mad_truckingjob:server:cancelActiveContract', '-contractId=', contractId)
+lib.callback.register('mad_truckingjob:server:cancelJobContract', function(source, contractId)
+    lib.print.debug('[IN]', 'mad_truckingjob:server:cancelJobContract', '-contractId=', contractId)
 
-    if not contractId then
-        error('Invalid contractId!', 1)
+    if not source or not contractId then
+        error('Invalid input parameters!', 1)
     end
 
-    if activeContracts[source].id ~= contractId then
-        error('Contract not in local memory!', 1) -- TODO: get active contracts from SQL on resource initialization, to prevent losing job on server restart
+    local citizenId = getCitizenIdFromSource(source)
+
+    if activeContracts[citizenId].id ~= contractId then
+        error(string.format('Contract [%s] for citizen id [%s] not active!', contractId, citizenId), 1) -- TODO: get active contracts from SQL on resource initialization, to prevent losing job on server restart
     end
 
-    SetExistingContractToCancelledInSQL(source, contractId)
-    UpdateWorkTicket(source, contractId, 'CANCELLED')
+    SetExistingContractToCancelledInSQL(citizenId, contractId)
+    UpdateWorkTicket(citizenId, contractId, 'CANCELLED')
 
-    local vehicles = activeJobVehicles[source]
+    local vehicles = activeJobVehicles[citizenId]
     if vehicles then
         for _, vehicle in pairs(vehicles) do
             if vehicle and vehicle ~= 0 and DoesEntityExist(vehicle) then
@@ -209,9 +226,9 @@ lib.callback.register('mad_truckingjob:server:cancelActiveContract', function(so
         end
     end
 
-    activeContracts[source] = nil
-    activeJobVehicles[source] = nil
+    activeContracts[citizenId] = nil
+    activeJobVehicles[citizenId] = nil
 
-    lib.print.debug('[OUT]', 'mad_truckingjob:server:cancelActiveContract', '-')
+    lib.print.debug('[OUT]', 'mad_truckingjob:server:cancelJobContract', '-')
     return true
 end)

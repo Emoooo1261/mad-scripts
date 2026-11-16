@@ -88,7 +88,7 @@ local function isVehicleSpawnAreaEmpty(spawnAreaZone)
     return isEmpty
 end
 
-function RegisterJobVehicleForClient(truckAndTrailerData)
+function RegisterJobVehicleForClient(source, truckAndTrailerData)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-truck=', truckAndTrailerData.truck, '-truckCoords=', truckAndTrailerData.truckCoords, '-trailer=', truckAndTrailerData.trailer, '-trailerCoords=', truckAndTrailerData.trailerCoords)
 
@@ -141,33 +141,8 @@ function SpawnJobVehicle()
     return result
 end
 
-lib.callback.register('mad_truckingjob:server:spawnJobVehicle', function(source, contractTitle)
-    lib.print.debug('[IN]mad_truckingjob:server:addActiveContract', '-source=', source, '-contractTitle=', contractTitle)
-
-    if not isValidContract(source, contractTitle) then
-        error('Couldn\'t find correct contract!', 1)
-    end
-
-    local truckAndTrailer = SpawnJobVehicle()
-    local successRegisteringVehicle = RegisterJobVehicleForClient(truckAndTrailer)
-
-    local contractId = nil
-    local destination = nil
-    if successRegisteringVehicle then
-        destination = getDeliveryDestination(contractTitle)
-        -- TODO implement a way to respawn the truck and trailer on server restart if job is ongoing
-        -- TODO add reward
-
-        contractId = addContractToSQLTable(source, contractTitle, truckAndTrailer.trailerCoords, destination)
-
-        activeContracts[source] = contractId  -- cache
-        giveWorkTicket(source, contractTitle, contractId)
-    end
-
-    lib.print.debug('[OUT]mad_truckingjob:server:addActiveContract', '-contractId=', contractId, '-destination=', destination)
-    return contractId, destination
-end)
-
+-- TODO check when vehicle is being despawned.
+-- It shouldn't be despawned when job expires or if it is not close to the owner?
 function DespawnJobVehicle(vehicleNetId)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-vehicle=', vehicleNetId)

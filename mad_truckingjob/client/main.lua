@@ -39,9 +39,11 @@ function CreateJobContract(contractTitle)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle)
 
-    local successRegisteringVehicle, contractId, destination = lib.callback.await('mad_truckingjob:server:addActiveContract', false, contractTitle)
+    local successRegisteringVehicle, contractId, destination = lib.callback.await('mad_truckingjob:server:addJobContract', false, contractTitle)
 
-    if successRegisteringVehicle == false then
+    if successRegisteringVehicle == nil or not contractId or not destination then
+        error("Server returned invalid parameters when trying to create a job contract!", 1)
+    elseif successRegisteringVehicle == false then
         lib.notify({
             title = 'Trucking job',
             description = 'Couldn\'t spawn job vehicle. Is spawn area occupied?',
@@ -50,8 +52,6 @@ function CreateJobContract(contractTitle)
         warn(string.format('%s - Couldn\'t spawn job vehicle. Maybe spawn area is occupied.', func_name))
         lib.print.debug('[OUT]', func_name, '-successRegisteringVehicle=', successRegisteringVehicle)
         return nil
-    elseif successRegisteringVehicle == nil or not contractId or not destination then
-        error("Server returned invalid parameters when trying to create a job contract!", 1)
     end
 
     contract.id = contractId
@@ -100,7 +100,7 @@ function CancelJobContract()
         error('Contract ID not found!', 1)
     end
 
-    local cancelled = lib.callback.await('mad_truckingjob:server:cancelActiveContract', false, contract.id)
+    local cancelled = lib.callback.await('mad_truckingjob:server:cancelJobContract', false, contract.id)
     if not cancelled then
         lib.notify({
             title = 'Trucking job',
@@ -151,7 +151,7 @@ local function returnDeliveryVehicle(vehicle)
         exports.ox_target:removeLocalEntity(vehicle)
 
         local vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle)
-        lib.callback.await('mad_truckingjob:server:removeActiveContract', false, contract.id, vehicleNetId, isTrailer)
+        lib.callback.await('mad_truckingjob:server:completeJobContract', false, contract.id, vehicleNetId, isTrailer)
 
         lib.notify({
             title = 'Vehicle returned!',
