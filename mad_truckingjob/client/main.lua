@@ -1,16 +1,19 @@
+
+local configClient = require 'config.client'
 local contract = {
     id = nil,
     destination = nil,
     blip = nil,
     truck = nil,
-    trailer = nil
+    trailer = nil,
+    isSecondTrailerDelivery = false
 }
 local spawnAreaDebugZones = {}
 
 
 local function createDropOffBlip(destination)
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-')
+    lib.print.debug('[IN]', func_name, '-destination=', destination)
 
     if contract.blip then
         RemoveBlip(contract.blip)
@@ -41,7 +44,7 @@ function CreateJobContract(contractTitle)
 
     local successRegisteringVehicle, contractId, destination = lib.callback.await('mad_truckingjob:server:addJobContract', false, contractTitle)
 
-    if successRegisteringVehicle == nil or not contractId or not destination then
+    if successRegisteringVehicle == nil then
         error("Server returned invalid parameters when trying to create a job contract!", 1)
     elseif successRegisteringVehicle == false then
         lib.notify({
@@ -52,6 +55,10 @@ function CreateJobContract(contractTitle)
         warn(string.format('%s - Couldn\'t spawn job vehicle. Maybe spawn area is occupied.', func_name))
         lib.print.debug('[OUT]', func_name, '-successRegisteringVehicle=', successRegisteringVehicle)
         return nil
+    end
+
+    if not contractId or not destination then
+        error("Server returned invalid parameters when trying to create a job contract!", 1)
     end
 
     contract.id = contractId
@@ -87,7 +94,9 @@ local function finishJobContract()
     contract.blip = nil
     contract.truck = nil
     contract.trailer = nil
+    contract.isSecondTrailerDelivery = false
     SetCurrentJob(nil)
+    SetFirstDeliveryDone(false)
 
     lib.print.debug('[OUT]', func_name, '-')
 end
@@ -133,6 +142,32 @@ function CancelJobContract()
     return true
 end
 
+function StartSecondTrailerDelivery()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-')
+
+    contract.isSecondTrailerDelivery = true
+    local successRegisteringVehicle, destination = lib.callback.await('mad_truckingjob:server:startSecondDelivery', false, contract.id)
+
+    if successRegisteringVehicle == nil then
+        error("Server returned invalid parameters when trying to create a job contract!", 1)
+    elseif successRegisteringVehicle == false then
+        lib.notify({
+            title = 'Trucking job',
+            description = 'Couldn\'t spawn job vehicle. Is spawn area occupied?',
+            type = 'error'
+        })
+        warn(string.format('%s - Couldn\'t spawn job vehicle. Maybe spawn area is occupied.', func_name))
+        lib.print.debug('[OUT]', func_name, '-successRegisteringVehicle=', successRegisteringVehicle)
+        return
+    end
+
+    contract.destination = destination
+    createDropOffBlip(destination)
+
+    lib.print.debug('[OUT]', func_name, '-')
+end
+
 -- TODO add a timeout for the job to expire
 local function returnDeliveryVehicle(vehicle)
     local func_name = debug.getinfo(1, 'n').name
@@ -160,6 +195,10 @@ local function returnDeliveryVehicle(vehicle)
 
         if isTrailer then
             contract.trailer = nil
+            if not contract.isSecondTrailerDelivery then
+                SetFirstDeliveryDone(true)
+                createDropOffBlip(configClient.bossPeds.paleto.coords)
+            end
         else
             finishJobContract()
         end
@@ -168,34 +207,77 @@ local function returnDeliveryVehicle(vehicle)
     lib.print.debug('[OUT]', func_name, '-')
 end
 
-RegisterNetEvent('mad_truckingjob:client:registerVehicleTargets', function(truckNetId, trailerNetId)
-    lib.print.debug('[IN]mad_truckingjob:client:registerTruckTarget', '-truckNetId=', truckNetId, '-trailerNetId=', trailerNetId)
+local function getVehicleEntityFromNetworkId(vehNetId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-vehNetId=', vehNetId)
 
-    if not truckNetId or not trailerNetId then
-        error('Received invalid truck and trailer net IDs', 1)
+    if type(vehNetId) ~= 'number' or vehNetId <= 0 then
+        error(string.format('Invalid vehicle network ID: %s', tostring(vehNetId)), 1)
     end
 
-    local truck = 0
-    local trailer = 0
-
+    local veh = 0
     local retries = 0
-    while truck == 0 or trailer == 0 or not DoesEntityExist(truck) or not DoesEntityExist(trailer) do
-        if retries >= 10 then -- TODO does it need more retries?
-            error("Truck and trailer creation failed!", 1)
+    local max_retries = 10
+
+    while veh == 0 or not DoesEntityExist(veh) do
+        if retries >= max_retries then -- TODO does it need more retries?
+            error("Vehicle creation failed!", 1)
         end
 
         Wait(1000)  -- NEEDS TIME TO SYNCHRONIZE SLOW ASS
 
-        truck = NetworkGetEntityFromNetworkId(truckNetId)
-        trailer = NetworkGetEntityFromNetworkId(trailerNetId)
+        veh = NetworkGetEntityFromNetworkId(vehNetId)
 
         retries = retries + 1
     end
 
+    if retries >= max_retries then
+        error(string.format('Vehicle network ID %d did not become available on this client within %d seconds!', vehNetId, retries), 1)
+    end
+
+    lib.print.debug('[OUT]', func_name, '-veh=', veh)
+    return veh
+end
+
+local function registerTruckTarget(truckNetId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-truckNetId=', truckNetId)
+
+    local truck = getVehicleEntityFromNetworkId(truckNetId)
+
+    exports.ox_target:addLocalEntity(truck, {
+        {
+            name = 'mad_truckingjob:return_truck',
+            icon = 'fa-solid fa-truck',
+            label = 'Return Truck',
+            distance = 2.5,
+
+            canInteract = function(entity)
+                return contract.isSecondTrailerDelivery and entity == truck and contract.destination ~= nil and isInReturnDistance()  -- is this check too much?
+            end,
+            onSelect = function(data)
+                if contract.trailer ~= nil then
+                    lib.notify({title = 'Can\'t return truck!',
+                                description = 'You have to return the trailer first.',
+                                type = 'error'})
+                else
+                    returnDeliveryVehicle(data.entity)
+                end
+            end
+        }
+    })
+
     Entity(truck).state.fuel = 100
 
-    contract.truck = truck
-    contract.trailer = trailer
+    lib.print.debug('[OUT]', func_name, '-truck=', truck)
+    return truck
+end
+
+local function registerTrailerTarget(trailerNetId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-trailerNetId=', trailerNetId)
+
+    local trailer = getVehicleEntityFromNetworkId(trailerNetId)
 
     exports.ox_target:addLocalEntity(trailer, {
         {
@@ -213,29 +295,26 @@ RegisterNetEvent('mad_truckingjob:client:registerVehicleTargets', function(truck
         }
     })
 
-    exports.ox_target:addLocalEntity(truck, {
-        {
-            name = 'mad_truckingjob:return_truck',
-            icon = 'fa-solid fa-truck',
-            label = 'Return Truck',
-            distance = 2.5,
+    lib.print.debug('[OUT]', func_name, '-trailer=', trailer)
+    return trailer
+end
 
-            canInteract = function(entity)
-                return entity == truck and contract.destination ~= nil and isInReturnDistance()  -- is this check too much?
-            end,
-            onSelect = function(data)
-                if contract.trailer ~= nil then
-                    lib.notify({title = 'Can\'t return truck!',
-                                description = 'You have to return the trailer first.',
-                                type = 'error'})
-                else
-                    returnDeliveryVehicle(data.entity)
-                end
-            end
-        }
-    })
+RegisterNetEvent('mad_truckingjob:client:registerVehicleTargets', function(truckNetId, trailerNetId)
+    lib.print.debug('[IN]mad_truckingjob:client:registerVehicleTargets', '-truckNetId=', truckNetId, '-trailerNetId=', trailerNetId)
 
-    lib.print.debug('[OUT]mad_truckingjob:client:registerTruckTarget', '-')
+    if not trailerNetId or (not truckNetId and not contract.truck) then
+        error('Received invalid truck and trailer net IDs', 1)
+    end
+
+    if not contract.truck then
+        local truck = registerTruckTarget(truckNetId)
+        contract.truck = truck
+    end
+
+    local trailer = registerTrailerTarget(trailerNetId)
+    contract.trailer = trailer
+
+    lib.print.debug('[OUT]mad_truckingjob:client:registerVehicleTargets', '-')
 end)
 
 RegisterNetEvent('mad_truckingjob:client:jobExpired', function(contractId)
@@ -257,7 +336,7 @@ RegisterNetEvent('mad_truckingjob:client:jobExpired', function(contractId)
     lib.print.debug('[OUT]mad_truckingjob:client:jobExpired', '-')
 end)
 
-RegisterNetEvent('mad_truckingjob:client:toggleSpawnAreaDebug', function(truckSpawnCoords, trailerSpawnCoords, spawnAreaSize)
+RegisterNetEvent('mad_truckingjob:client:toggleSpawnAreaDebug', function(spawnCoords, spawnAreaSize)
     if #spawnAreaDebugZones > 0 then
         for _, zone in ipairs(spawnAreaDebugZones) do
             zone:remove()
@@ -271,16 +350,10 @@ RegisterNetEvent('mad_truckingjob:client:toggleSpawnAreaDebug', function(truckSp
         return
     end
 
-    for index, truckCoords in ipairs(truckSpawnCoords) do
-        local trailerCoords = trailerSpawnCoords[index]
-        local center = vec3(
-            (truckCoords.x + trailerCoords.x) / 2,
-            (truckCoords.y + trailerCoords.y) / 2,
-            (truckCoords.z + trailerCoords.z) / 2
-        )
+    for _, truckCoords in ipairs(spawnCoords) do
 
         local zone = lib.zones.box({
-            coords = center,
+            coords = truckCoords,
             size = spawnAreaSize,
             rotation = truckCoords.w
         })

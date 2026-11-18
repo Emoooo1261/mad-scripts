@@ -7,7 +7,7 @@ local function isTrailer(vehicle)    -- do we need to check if entity is a trail
     -- lib.print.debug('[IN]', func_name, '-vehicle=', vehicle) -- function is called too often to log
 
     if not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then
-        lib.print.debug('[OUT]', func_name, '-isTrailer=', false)
+        -- lib.print.debug('[OUT]', func_name, '-isTrailer=', false)
         return false
     end
 
@@ -15,7 +15,7 @@ local function isTrailer(vehicle)    -- do we need to check if entity is a trail
 
     for _, trailerModel in ipairs(configShared.TrailerModels) do
         if model == trailerModel then
-            lib.print.debug('[OUT]', func_name, '-isTrailer=', true)
+            -- lib.print.debug('[OUT]', func_name, '-isTrailer=', true)
             return true
         end
     end

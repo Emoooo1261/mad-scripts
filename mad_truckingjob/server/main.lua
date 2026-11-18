@@ -3,13 +3,8 @@ local activeContracts = {}
 local activeJobVehicles = {}
 local activeJobCitizenIds = {}
 local isExpirationThreadRunning = false
-
 local CONTRACT_TIMEOUT_MS = 45 * 60 * 1000  -- 45mins
 
-
--- TODO finish the timeout function
--- TODO i think citizenId needs to be used instead of source, because source gives the current server id of the player,
--- but idk what happens with that id if the player reconnects to the server
 
 local function getDeliveryDestination(contractTitle)
     local func_name = debug.getinfo(1, 'n').name
@@ -18,7 +13,7 @@ local function getDeliveryDestination(contractTitle)
     local deliveryDestination = nil
     for _, item in pairs(configShared.contracts) do
         if item.title == contractTitle then
-            deliveryDestination = item.deliveries[math.random(#item.deliveries)]
+            deliveryDestination = item.deliveriesPaleto[math.random(#item.deliveriesPaleto)]
             break
         end
     end
@@ -63,7 +58,7 @@ local function expireActiveContract(citizenId, contractId)
     local playerSource = player and player.PlayerData.source
 
     if playerSource then
-        UpdateWorkTicket(citizenId, contractId, 'EXPIRED')
+        -- UpdateWorkTicket(citizenId, contractId, 'EXPIRED')
         TriggerClientEvent('mad_truckingjob:client:jobExpired', playerSource, contractId)
     end
 
@@ -117,6 +112,59 @@ local function getCitizenIdFromSource(source)
     return citizenId
 end
 
+local function validateExpectedVehicleNetIdForCitizenId(vehNetId, citizenId, isTrailer)
+    local vehicles = activeJobVehicles[citizenId]
+    if not vehicles then
+        error('No active job vehicles found!', 1)
+    end
+
+    local expectedEntity
+    if isTrailer then
+        expectedEntity = vehicles.trailer
+    else
+        expectedEntity = vehicles.truck
+    end
+
+    if not expectedEntity or expectedEntity == 0 or not DoesEntityExist(expectedEntity) then
+        error('Expected job vehicle does not exist!', 1)
+    end
+
+    local expectedNetId = NetworkGetNetworkIdFromEntity(expectedEntity)
+    if expectedNetId ~= vehNetId then
+        error(string.format('Invalid vehicle net ID: expected %d, received %d', expectedNetId, vehNetId), 1)
+    end
+end
+
+lib.callback.register('mad_truckingjob:server:startSecondDelivery', function(source, contractId)
+    lib.print.debug('[IN]mad_truckingjob:server:startSecondDelivery', '-source=', source, '-contractId=', contractId)
+
+    if not source or not contractId then
+        error('Invalid input parameters!', 1)
+    end
+
+    local citizenId = getCitizenIdFromSource(source)
+    if not activeContracts[citizenId] or activeContracts[citizenId].id ~= contractId then
+        error(string.format('Player with citizenId= %s doesn\'t have an active delivery job!', citizenId))
+    end
+
+    local secondTrailer = SpawnSecondTrailer()
+    if not secondTrailer or not secondTrailer.trailer or
+           secondTrailer.trailer == 0 or not DoesEntityExist(secondTrailer.trailer) then
+        warn('mad_truckingjob:server:startSecondDelivery - No Paleto trailer spawn area available.')
+        return false, nil
+    end
+
+    local trailerNetId = NetworkGetNetworkIdFromEntity(secondTrailer.trailer)
+    TriggerClientEvent('mad_truckingjob:client:registerVehicleTargets', source, nil, trailerNetId)
+    -- local successRegisteringVehicle = RegisterJobVehicleForClient(source, secondTrailer)
+
+    local destination = configShared.contracts[1].deliveriesPaleto[1]  -- TODO FIX THIS
+    activeJobVehicles[citizenId].trailer = secondTrailer.trailer
+
+    lib.print.debug('[OUT]mad_truckingjob:server:startSecondDelivery', '-successRegisteringVehicle=', successRegisteringVehicle, '-destination=', destination)
+    return true, destination
+end)
+
 lib.callback.register('mad_truckingjob:server:addJobContract', function(source, contractTitle)
     lib.print.debug('[IN]mad_truckingjob:server:addJobContract', '-source=', source, '-contractTitle=', contractTitle)
 
@@ -156,7 +204,7 @@ lib.callback.register('mad_truckingjob:server:addJobContract', function(source, 
             truck = truckAndTrailer.truck,
             trailer = truckAndTrailer.trailer
         }
-        GiveWorkTicket(source, contractTitle, contractId)
+        -- GiveWorkTicket(source, contractTitle, contractId)
 
         startExpirationThread()
     else
@@ -176,27 +224,26 @@ lib.callback.register('mad_truckingjob:server:completeJobContract', function(sou
 
     local citizenId = getCitizenIdFromSource(source)
 
-    if activeContracts[citizenId].id == contractId then
-        local success = false
-
-        if isTrailer then
-            success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRAILER')
-            if activeJobVehicles[citizenId] then
-                activeJobVehicles[citizenId].trailer = nil
-            end
-        else
-            success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRUCK')
-
-            SetExistingContractToCompletedInSQL(citizenId, contractId)
-            activeContracts[citizenId] = nil
-            if activeJobVehicles[citizenId] then
-                activeJobVehicles[citizenId].truck = nil
-            end
-        end
-        DespawnJobVehicle(vehicleNetId)
-    else
-        error(string.format('Tried to remove a contract that was not active!'))
+    if not activeContracts[citizenId] or activeContracts[citizenId].id ~= contractId then
+        error(string.format('Tried to complete contract %d for citizenId=%d that was not active!', contractId, citizenId))
     end
+
+    validateExpectedVehicleNetIdForCitizenId(vehicleNetId, citizenId, isTrailer)
+
+    local success = false
+
+    if isTrailer then
+        -- success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRAILER')
+        activeJobVehicles[citizenId].trailer = nil
+    else
+        -- success = UpdateWorkTicket(citizenId, contractId, 'RETURNED_TRUCK')
+
+        SetExistingContractToCompletedInSQL(citizenId, contractId)
+
+        activeJobVehicles[citizenId].truck = nil
+        activeContracts[citizenId] = nil
+    end
+    DespawnJobVehicle(vehicleNetId)
 
     lib.print.debug('[OUT]mad_truckingjob:server:completeJobContract', '-')
 end)
@@ -210,12 +257,12 @@ lib.callback.register('mad_truckingjob:server:cancelJobContract', function(sourc
 
     local citizenId = getCitizenIdFromSource(source)
 
-    if activeContracts[citizenId].id ~= contractId then
-        error(string.format('Contract [%s] for citizen id [%s] not active!', contractId, citizenId), 1) -- TODO: get active contracts from SQL on resource initialization, to prevent losing job on server restart
+    if not activeContracts[citizenId] or activeContracts[citizenId].id ~= contractId then
+        error(string.format('No active contract %s for citizen id %s', contractId, citizenId))
     end
 
     SetExistingContractToCancelledInSQL(citizenId, contractId)
-    UpdateWorkTicket(citizenId, contractId, 'CANCELLED')
+    -- UpdateWorkTicket(citizenId, contractId, 'CANCELLED')
 
     local vehicles = activeJobVehicles[citizenId]
     if vehicles then

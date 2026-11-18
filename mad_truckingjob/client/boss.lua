@@ -1,7 +1,18 @@
 local configShared = require 'config.shared'
 local configClient = require 'config.client'
-local bossPed = nil
+local bossPeds = {}
 local currentJob = nil
+local isFirstDeliveryDone = false
+local isSecondDeliveryOngoing = false
+
+function SetFirstDeliveryDone(isDeliveryDone)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-isDeliveryDone=', isDeliveryDone)
+
+    isFirstDeliveryDone = isDeliveryDone
+
+    lib.print.debug('[OUT]', func_name, '-')
+end
 
 function SetCurrentJob(contractTitle)
     local func_name = debug.getinfo(1, 'n').name
@@ -23,36 +34,53 @@ local function selectContract(contractTitle)
     lib.print.debug('[OUT]', func_name, '-')
 end
 
-local function openJobsMenu()
+local function openJobsMenu(isMainBoss)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-')
 
     local options = {}
-    local contextTitle = nil
+    local contextTitle = ''
 
-    if currentJob then
-        contextTitle = 'You have an active trucking job.'
+    if not currentJob then
+        if isMainBoss then
+            contextTitle = 'Select from available jobs.'
+            -- Create menu option for each contract
+            for _, contract in ipairs(configShared.contracts) do
+                options[#options + 1] = {
+                    title = contract.title,
+                    description = 'DESCRIPTION',
+                    icon = 'truck',
 
-        options[#options + 1] = {
-            title = 'Cancel active job',
-            description = ('Current job: %s.\nCancel this job and return the provided vehicles.'):format(currentJob),
-            icon = 'xmark',
-
-            onSelect = function()
-                CancelJobContract()
+                    onSelect = function()
+                        selectContract(contract.title)
+                    end
+                }
             end
-        }
+        else
+            contextTitle = 'Get a job.'
+        end
     else
-        contextTitle = 'Select from available jobs.'
-        -- Create menu option for each contract
-        for _, contract in ipairs(configShared.contracts) do
-            options[#options + 1] = {
-                title = contract.title,
+        if not isSecondDeliveryOngoing and isFirstDeliveryDone and not isMainBoss then
+            contextTitle = 'Get new trailer.'
+            options[1] = {
+                title = 'Return new trailer back to the city docks',
                 description = 'DESCRIPTION',
                 icon = 'truck',
 
                 onSelect = function()
-                    selectContract(contract.title)
+                    StartSecondTrailerDelivery()
+                    isSecondDeliveryOngoing = true
+                end
+            }
+        elseif not isFirstDeliveryDone or isSecondDeliveryOngoing then
+            contextTitle = 'You have an active trucking job.'
+            options[#options + 1] = {
+                title = 'Cancel active job',
+                description = ('Current job: %s.\nCancel this job and return the provided vehicles.'):format(currentJob),
+                icon = 'xmark',
+
+                onSelect = function()
+                    CancelJobContract()
                 end
             }
         end
@@ -79,15 +107,15 @@ local function openJobsMenu()
     lib.print.debug('[OUT]', func_name, '-')
 end
 
-local function createBoss()
+local function createBossPed(pedData)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-')
 
-    local model = joaat(configClient.bossPed.model)
+    local model = joaat(pedData.model)
     lib.requestModel(model)
 
-    local coords = configClient.bossPed.coords
-    bossPed = CreatePed(
+    local coords = pedData.coords
+    local bossPed = CreatePed(
         0,
         model,
         coords.x,
@@ -103,10 +131,10 @@ local function createBoss()
     SetBlockingOfNonTemporaryEvents(bossPed, true)
 
     -- Give ped scenario (action the npc is doing)
-    if configClient.bossPed.scenario then
+    if pedData.scenario then
         TaskStartScenarioInPlace(
             bossPed,
-            configClient.bossPed.scenario,
+            pedData.scenario,
             0,
             true
         )
@@ -118,10 +146,10 @@ local function createBoss()
             name = 'mad_truckingjob',
             icon = 'fa-solid fa-truck',
             label = 'Talk to Boss',
-            distance = configClient.bossPed.targetDistance,
+            distance = pedData.targetDistance,
 
             onSelect = function()
-                openJobsMenu()
+                openJobsMenu(pedData.isMainBoss)
             end
         }
     })
@@ -131,6 +159,23 @@ local function createBoss()
     -- SetModelAsNoLongerNeeded(model) frees the model from memory. 
     -- Ped is already spawned no need to keep the memory available.
     SetModelAsNoLongerNeeded(model)
+
+    lib.print.debug('[OUT]', func_name, '-')
+    return bossPed
+end
+
+local function createBoss()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-')
+
+    for i, pedData in pairs(configClient.bossPeds) do
+        local bossPed = createBossPed(pedData)
+        if bossPed and bossPed ~= 0 then
+            bossPeds[i] = bossPed
+        else
+            error('Failed to create trucking job boss peds!', 1)
+        end
+    end
 
     lib.print.debug('[OUT]', func_name, '-')
 end
@@ -155,10 +200,14 @@ AddEventHandler('onResourceStop', function(resource)
 
     if resource ~= GetCurrentResourceName() then return end
 
-    if bossPed and DoesEntityExist(bossPed) then
-        exports.ox_target:removeLocalEntity(bossPed)
-        DeleteEntity(bossPed)
+    for i, bossPed in pairs(bossPeds) do
+        if bossPed and DoesEntityExist(bossPed) then
+            exports.ox_target:removeLocalEntity(bossPed)
+            DeleteEntity(bossPed)
+        end
     end
+
+    bossPeds = nil
 
     lib.print.debug('[OUT]onResourceStop', '-')
 end)
