@@ -14,18 +14,18 @@ client_scripts {
 	'@qbx_core/modules/playerdata.lua',
 	'client/main.lua',
 	'client/boss.lua',
+	'client/blip.lua'
 }
 
 server_scripts {
 	'server/main.lua',
 	'server/vehicle.lua',
 	'server/queries.lua',
-	'server/work_ticket.lua',
+	'server/helper.lua',
 	'@oxmysql/lib/MySQL.lua',
 }
 
 files {
-	'config/client.lua',
 	'config/server.lua',
 	'config/shared.lua'
 }

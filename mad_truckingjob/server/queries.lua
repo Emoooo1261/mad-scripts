@@ -1,4 +1,4 @@
-local function getCharInfo(source)
+local function getCharName(source)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-source=', source)
 
@@ -8,57 +8,70 @@ local function getCharInfo(source)
         return nil
     end
 
-    local citizenId = Player.PlayerData.citizenid
     local charinfo = Player.PlayerData.charinfo
-    local charName = ('%s %s'):format(charinfo.firstname, charinfo.lastname)
+    local charName = string.format('%s %s', charinfo.firstname, charinfo.lastname)
 
-    lib.print.debug('[OUT]', func_name, '-citizenId=', citizenId, '-charName', charName)
-    return citizenId, charName
+    lib.print.debug('[OUT]', func_name, '-charName', charName)
+    return charName
 end
 
 -- Need to round coords before saving to SQL, otherwise they are saved with too many decimals
 local function roundCoord(value)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-value=', value)
+
     local scale = 100
 
     if not value then return end -- incase of nil value, just ignore and return nil
 
     if value >= 0 then
-        return math.floor(value * scale + 0.5) / scale
+        local rounded = math.floor(value * scale + 0.5) / scale
+        lib.print.debug('[OUT]', func_name, '-rounded=', rounded)
+        return rounded
     end
 
-    return math.ceil(value * scale - 0.5) / scale
+    local rounded = math.ceil(value * scale - 0.5) / scale
+    lib.print.debug('[OUT]', func_name, '-rounded=', rounded)
+    return rounded
 end
 
 local function serializeCoords(coords)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-coords=', coords)
+
     -- when coords are vec3 coords.w is nil
     local coordsLst = {roundCoord(coords.x),
                     roundCoord(coords.y),
                     roundCoord(coords.z),
                     roundCoord(coords.w)}
 
-    return json.encode(coordsLst)
+    local serializedCoords = json.encode(coordsLst)
+    lib.print.debug('[OUT]', func_name, '-serializedCoords=', serializedCoords)
+    return serializedCoords
 end
 
-function AddContractToSQL(source, contractTitle, startCoords, endCoords)
+function AddContractToSQL(source, citizenId, contractTitle, startCoords, destCoords, truckCoords, trailerCoords, reward, secondsToExpire)
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-source=', source, '-contractTitle', contractTitle, '-startCoords', startCoords, '-endCoords', endCoords)
+    lib.print.debug('[IN]', func_name, '-source=', source, '-citizenId=', citizenId, '-contractTitle', contractTitle, '-startCoords', startCoords, '-destCoords', destCoords, '-truckCoords=', truckCoords, '-trailerCoords=', trailerCoords, '-reward=', reward, '-secondsToExpire=', secondsToExpire)
 
-    local citizenid, charName = getCharInfo(source)
+    local charName = getCharName(source)
     local status = 'active'
-    local reward = 1000
 
     local contractId = MySQL.insert.await([[
         INSERT INTO mad_truckingjob_contracts
-            (citizenid, char_name, job_title, start_coords, end_coords, status, reward)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (citizenid, char_name, contract_title, start_coords, dest_coords, truck_vec4, trailer_vec4, status, reward, seconds_to_expire)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]], {
-        citizenid,
+        citizenId,
         charName,
         contractTitle,
         serializeCoords(startCoords),
-        serializeCoords(endCoords),
+        serializeCoords(destCoords),
+        serializeCoords(truckCoords),
+        serializeCoords(trailerCoords),
         status,
-        reward
+        reward,
+        secondsToExpire
     })
 
     if not contractId then
@@ -89,14 +102,14 @@ local function setExistingContractStatusInSQL(citizenId, contractId, status)
     })
 
     if updatedRows ~= 1 then
-        error(('Failed to set contract %s to %s for player %s'):format(contractId, status, citizenId), 1)
+        error(string.format('Failed to set contract %s to %s for player %s', contractId, status, citizenId), 1)
     end
 
     lib.print.debug('[OUT]', func_name, '-updatedRows=', updatedRows)
     return true
 end
 
-function SetExistingContractToCompletedInSQL(citizenId, contractId)
+function SetExistingContractToCompletedInSQL(citizenId, contractId, secondsToExpire)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-citizenId=', citizenId, '-contractId', contractId)
 
@@ -106,7 +119,7 @@ function SetExistingContractToCompletedInSQL(citizenId, contractId)
     return result
 end
 
-function SetExistingContractToCancelledInSQL(citizenId, contractId)
+function SetExistingContractToCancelledInSQL(citizenId, contractId, secondsToExpire)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-citizenId=', citizenId, '-contractId', contractId)
 
@@ -114,4 +127,84 @@ function SetExistingContractToCancelledInSQL(citizenId, contractId)
 
     lib.print.debug('[OUT]', func_name, '-result=', result)
     return result
+end
+
+function GetActiveContractsFromSQL()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-')
+
+    local contracts = MySQL.query.await([[
+        SELECT *
+        FROM mad_truckingjob_contracts
+        WHERE status = ?
+    ]], { 'active' })
+
+    lib.print.debug('[OUT]', func_name, '-contractCount=', #contracts)
+    return contracts
+end
+
+function UpdateExistingContractInSQL(contractId, contractTitle, destCoords, currTruckCoords, currTrailerCoords, reward, secondsToExpire)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug(
+        '[IN]', func_name,
+        '-contractId=', contractId,
+        '-contractTitle=', contractTitle,
+        '-destCoords=', destCoords,
+        '-currTruckCoords=', currTruckCoords,
+        '-currTrailerCoords=', currTrailerCoords,
+        '-reward=', reward,
+        '-secondsToExpire=', secondsToExpire
+    )
+
+    local updateQuery
+    local parameters
+
+    if currTrailerCoords then
+        updateQuery = [[
+            UPDATE mad_truckingjob_contracts
+            SET contract_title = ?,
+                dest_coords = ?,
+                truck_vec4 = ?,
+                trailer_vec4 = ?,
+                reward = ?,
+                seconds_to_expire = ?
+            WHERE id = ? AND status = 'active'
+        ]]
+        parameters = {
+            contractTitle,
+            serializeCoords(destCoords),
+            serializeCoords(currTruckCoords),
+            serializeCoords(currTrailerCoords),
+            reward,
+            secondsToExpire,
+            contractId
+        }
+    else
+        updateQuery = [[
+            UPDATE mad_truckingjob_contracts
+            SET contract_title = ?,
+                dest_coords = ?,
+                truck_vec4 = ?,
+                trailer_vec4 = NULL,
+                reward = ?,
+                seconds_to_expire = ?
+            WHERE id = ? AND status = 'active'
+        ]]
+        parameters = {
+            contractTitle,
+            serializeCoords(destCoords),
+            serializeCoords(currTruckCoords),
+            reward,
+            secondsToExpire,
+            contractId
+        }
+    end
+
+    local updatedRows = MySQL.update.await(updateQuery, parameters)
+
+    if updatedRows ~= 1 then
+        error(string.format('Failed to update active contract %s', contractId), 1)
+    end
+
+    lib.print.debug('[OUT]', func_name, '-updatedRows=', updatedRows)
 end

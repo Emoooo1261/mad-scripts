@@ -1,100 +1,177 @@
 local configShared = require 'config.shared'
-local configClient = require 'config.client'
 local bossPeds = {}
-local currentJob = nil
-local isFirstDeliveryDone = false
-local isSecondDeliveryOngoing = false
+local currentJob = {
+    contract = nil,
+    destBossId = nil
+}
 
-function SetFirstDeliveryDone(isDeliveryDone)
+local isTrailerDelivered = true  -- job has not started
+local selectedFinishJob = false
+
+
+function GetCurrentJob()
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-isDeliveryDone=', isDeliveryDone)
+    lib.print.debug('[IN]', func_name, '-')
 
-    isFirstDeliveryDone = isDeliveryDone
-
-    lib.print.debug('[OUT]', func_name, '-')
+    lib.print.debug('[OUT]', func_name, '-currentJob=', currentJob)
+    return currentJob
 end
 
-function SetCurrentJob(contractTitle)
+function RestoreCurrentJob(contractTitle, destinationBossId, trailerDelivered)
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle)
+    lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle, '-destinationBossId=', destinationBossId, '-trailerDelivered=', trailerDelivered)
 
-    currentJob = contractTitle
+    if type(contractTitle) ~= 'string' or contractTitle == '' or not destinationBossId
+        or type(trailerDelivered) ~= 'boolean' then
+        error('Invalid saved trucking job data!', 1)
+    end
 
-    lib.print.debug('[OUT]', func_name, '-')
+    currentJob.contract = contractTitle
+    currentJob.destBossId = destinationBossId
+    isTrailerDelivered = trailerDelivered
+    selectedFinishJob = false
+
+    lib.print.debug('[OUT]', func_name, '-currentJob=', currentJob)
 end
 
-local function selectContract(contractTitle)
+function ClearCurrentJob()
     local func_name = debug.getinfo(1, 'n').name
-    lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle)
+    lib.print.debug('[IN]', func_name, '-currentJob=', currentJob)
 
-    if CreateJobContract(contractTitle) then
-        SetCurrentJob(contractTitle)
+    currentJob.contract = nil
+    currentJob.destBossId = nil
+    isTrailerDelivered = true
+    selectedFinishJob = false
+
+    lib.print.debug('[OUT]', func_name, '-currentJob=', currentJob)
+end
+
+function GetBossCoords()
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-destinationBossId=', currentJob.destBossId)
+
+    for _, bossData in ipairs(configShared.bossPeds) do
+        if bossData.id == currentJob.destBossId then
+            return bossData.coords
+        end
+    end
+
+    lib.print.debug('[OUT]', func_name, '-coords=', nil)
+end
+
+function SetTrailerDelivered(isDelivered)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-isDelivered=', isDelivered)
+
+    isTrailerDelivered = isDelivered
+
+    lib.print.debug('[OUT]', func_name, '-isTrailerDelivered=', isTrailerDelivered)
+end
+
+local function selectContract(contractTitle, startBossId, destBossPedId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-contractTitle=', contractTitle, '-destBossPedId=', destBossPedId)
+
+    local contractId = StartJob(contractTitle, startBossId)
+
+    if contractId then
+        currentJob.contract = contractTitle
+        currentJob.destBossId = destBossPedId
+
+        isTrailerDelivered = false
     end
 
     lib.print.debug('[OUT]', func_name, '-')
 end
 
-local function openJobsMenu(isMainBoss)
+local function filterContractsForBoss(pedId)
+    local func_name = debug.getinfo(1, 'n').name
+    lib.print.debug('[IN]', func_name, '-pedId=', pedId)
+
+    local contracts = {}
+    for _, bossPed in ipairs(configShared.bossPeds) do
+        if bossPed.id ~= pedId then
+            contracts[bossPed.id] = bossPed.contracts
+        end
+    end
+
+    lib.print.debug('[OUT]', func_name, '-nrContracts=', #contracts)
+    return contracts
+end
+
+local function openJobsMenu(contracts, currBossPedId)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-')
 
     local options = {}
     local contextTitle = ''
 
-    if not currentJob then
-        if isMainBoss then
-            contextTitle = 'Select from available jobs.'
-            -- Create menu option for each contract
-            for _, contract in ipairs(configShared.contracts) do
+    if not currentJob.contract then
+        contextTitle = 'Select from available jobs.'
+        -- Create menu option for each contract
+        for destBossPedId, bossContracts in pairs(contracts) do
+            for _, contract in ipairs(bossContracts) do
                 options[#options + 1] = {
                     title = contract.title,
-                    description = 'DESCRIPTION',
+                    description = contract.description,
                     icon = 'truck',
 
                     onSelect = function()
-                        selectContract(contract.title)
+                        selectContract(contract.title, currBossPedId, destBossPedId)
                     end
                 }
             end
-        else
-            contextTitle = 'Get a job.'
         end
     else
-        if not isSecondDeliveryOngoing and isFirstDeliveryDone and not isMainBoss then
-            contextTitle = 'Get new trailer.'
+        if selectedFinishJob then
+            contextTitle = 'Return truck to finish the job.'
+        elseif isTrailerDelivered and currentJob.destBossId == currBossPedId then
+            contextTitle = 'Get new trailer. Select from available jobs.'
+            local title = 'Return truck and finish job.'
+            local description = 'Go return the truck and come back to get paid.'
+
             options[1] = {
-                title = 'Return new trailer back to the city docks',
-                description = 'DESCRIPTION',
+                title = title,
+                description = description,
                 icon = 'truck',
 
                 onSelect = function()
-                    StartSecondTrailerDelivery()
-                    isSecondDeliveryOngoing = true
+                    SetBlipsToFinishJob()
+                    selectedFinishJob = true
                 end
             }
-        elseif not isFirstDeliveryDone or isSecondDeliveryOngoing then
-            contextTitle = 'You have an active trucking job.'
+
+            for _, bossContracts in pairs(contracts) do
+                for _, contract in ipairs(bossContracts) do
+                    options[#options + 1] = {
+                        title = contract.title,
+                        description = contract.description,
+                        icon = 'truck',
+
+                        onSelect = function()
+                            local startedNewDelivery = StartNewDelivery(contract.title, currBossPedId)
+                            if startedNewDelivery then
+                                isTrailerDelivered = false
+                            end
+                        end
+                    }
+                end
+            end
+        end
+    end
+
+    if currentJob.contract then
+        contextTitle = 'You have an active trucking job.'
             options[#options + 1] = {
                 title = 'Cancel active job',
-                description = ('Current job: %s.\nCancel this job and return the provided vehicles.'):format(currentJob),
+                description = string.format('Current job: %s.\nCancel this job and return the provided vehicles.\nYou will not get paid if you cancel the job!', currentJob.contract),
                 icon = 'xmark',
 
                 onSelect = function()
                     CancelJobContract()
                 end
             }
-        end
     end
-
-    options[#options + 1] = {
-        title = 'Exit',
-        description = 'Close this menu.',
-        icon = 'xmark',
-
-        onSelect = function()
-            lib.hideContext()
-        end
-    }
 
     lib.registerContext({
         id = 'truckingjob_contracts',
@@ -149,7 +226,8 @@ local function createBossPed(pedData)
             distance = pedData.targetDistance,
 
             onSelect = function()
-                openJobsMenu(pedData.isMainBoss)
+                local contracts = filterContractsForBoss(pedData.id)
+                openJobsMenu(contracts, pedData.id)
             end
         }
     })
@@ -168,10 +246,11 @@ local function createBoss()
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-')
 
-    for i, pedData in pairs(configClient.bossPeds) do
+    for i, pedData in pairs(configShared.bossPeds) do
         local bossPed = createBossPed(pedData)
         if bossPed and bossPed ~= 0 then
             bossPeds[i] = bossPed
+            CreateBossBlip(pedData.coords)
         else
             error('Failed to create trucking job boss peds!', 1)
         end
@@ -182,7 +261,8 @@ end
 
 -- Start main functionality when Client resource starts
 AddEventHandler('onClientResourceStart', function(resource)
-    lib.print.debug('[IN]onClientResourceStart', '-resource=', resource)
+    local func_name = 'onClientResourceStart'
+    lib.print.debug('[IN]', func_name, '-resource=', resource)
 
     if resource ~= GetCurrentResourceName() then
         return
@@ -190,24 +270,25 @@ AddEventHandler('onClientResourceStart', function(resource)
 
     createBoss()
 
-    lib.print.debug('[OUT]onClientResourceStart', '-')
+    lib.print.debug('[OUT]', func_name, '-')
 end)
 
 
 -- Cleanup when resource is stopped
 AddEventHandler('onResourceStop', function(resource)
-    lib.print.debug('[IN]onResourceStop', '-resource=', resource)
+    local func_name = 'onResourceStop'
+    lib.print.debug('[IN]', func_name, '-resource=', resource)
 
     if resource ~= GetCurrentResourceName() then return end
 
-    for i, bossPed in pairs(bossPeds) do
+    for _, bossPed in ipairs(bossPeds) do
         if bossPed and DoesEntityExist(bossPed) then
             exports.ox_target:removeLocalEntity(bossPed)
             DeleteEntity(bossPed)
         end
     end
 
-    bossPeds = nil
+    bossPeds = {}
 
-    lib.print.debug('[OUT]onResourceStop', '-')
+    lib.print.debug('[OUT]', func_name, '-')
 end)
