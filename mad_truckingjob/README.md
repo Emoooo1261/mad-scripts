@@ -1,5 +1,5 @@
-# mad_truckerjob
-MAD Server trucker Job
+# mad_trucking
+MAD Server trucking Job
 
 ## TODO LIST
 - Implement functionality for loading up the trailer -> and then loading off the trailer at destination. (?)
