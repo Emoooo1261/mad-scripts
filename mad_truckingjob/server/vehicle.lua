@@ -168,17 +168,56 @@ local function createSpawnAreaZone(coords)
                 coords = vec3(coords.x, coords.y, coords.z),
                 size = configServer.vehicles.spawnAreaSize,
                 rotation = coords.w})
-    -- TriggerClientEvent('mad_truckingjob:client:toggleSpawnAreaDebug', source, coords, configServer.vehicles.spawnAreaSize)  -- ONLY FOR DEBUGGING!
+    TriggerClientEvent('mad_truckingjob:client:toggleSpawnAreaDebug', source, coords, configServer.vehicles.spawnAreaSize)  -- ONLY FOR DEBUGGING!
 
     lib.print.debug('[OUT]', func_name, '-spawnArea=', spawnArea)
     return spawnArea
 end
 
---- This only checks if the center? point of the vehicle entity is inside the box spawn area.
---- That check will be very innacurate with bigger vehicles.
---- Perfect fix would be to have the full (or approximate) dimensions of the vehicle and 
---- check multiple points from it to see if any of them are inside the box.
---- That is too complicated and unnecessary so just make spawn boxes bigger.
+-- Approximate trailer footprint in meters, sampled relative to its heading.
+local trailerLongitudinalOffsets = {-8.0, -6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0, 8.0}
+local trailerLateralOffsets = {-1.5, 0.0, 1.5}
+
+--- If vehicle is 'trailer' type then a check is done for multiple points,
+--- roughly covering a trailer in a 2D (rectangle) shape
+local function isVehicleInsideSpawnZone(vehicle, spawnAreaZone)
+    local vehicleCoords = GetEntityCoords(vehicle)
+    if spawnAreaZone:contains(vehicleCoords) then
+        return true
+    end
+
+    if GetVehicleType(vehicle) ~= 'trailer' then
+        return false
+    end
+
+    -- Gets the heading direction in degrees (like vec4.w) and converts to radians for sin and cos
+    local heading = math.rad(GetEntityHeading(vehicle))
+    -- Gets forward X and Y heading of the vehicle (at heading 0: forward is (0, 1), at heading 90: forward is (-1, 0))
+    local forwardX, forwardY = -math.sin(heading), math.cos(heading)
+    -- Gets right X and Y heading of the vehicle (at heading 0: right is (1, 0), at heading 90: right is (0, 1))
+    local rightX, rightY = math.cos(heading), math.sin(heading)
+
+    -- When multiplied by an offset gives how much to move along that axis. 
+    -- For example, forwardX * 4 + rightX * 1.5 is X moving 4 metres forward and 1.5 meters to the right.
+    for _, forwardOffset in ipairs(trailerLongitudinalOffsets) do
+        for _, lateralOffset in ipairs(trailerLateralOffsets) do
+            if forwardOffset ~= 0.0 or lateralOffset ~= 0.0 then
+                local sampleCoords = vec3(
+                    vehicleCoords.x + forwardX * forwardOffset + rightX * lateralOffset,
+                    vehicleCoords.y + forwardY * forwardOffset + rightY * lateralOffset,
+                    vehicleCoords.z
+                )
+
+                if spawnAreaZone:contains(sampleCoords) then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
 local function detSpawnCoords(coordsList)
     local func_name = debug.getinfo(1, 'n').name
     lib.print.debug('[IN]', func_name, '-coordsList=', coordsList)
@@ -191,7 +230,7 @@ local function detSpawnCoords(coordsList)
         local isOccupied = false
 
         for _, vehicle in ipairs(vehicles) do
-            if DoesEntityExist(vehicle) and spawnAreaZone:contains(GetEntityCoords(vehicle)) then
+            if DoesEntityExist(vehicle) and isVehicleInsideSpawnZone(vehicle, spawnAreaZone) then
                 isOccupied = true
                 break
             end
